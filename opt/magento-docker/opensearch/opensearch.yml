@@ -1,0 +1,7 @@
+cluster.name: magento-opensearch
+node.name: magento-node
+network.host: 0.0.0.0
+discovery.type: single-node
+http.port: 9200
+plugins.security.disabled: true
+indices.query.bool.max_clause_count: 4096
