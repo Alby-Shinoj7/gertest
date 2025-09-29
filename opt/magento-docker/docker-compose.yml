@@ -1,0 +1,137 @@
+version: "3.9"
+
+services:
+  mysql:
+    build:
+      context: ./mysql
+    image: magento-mysql:latest
+    container_name: magento-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-magento}
+      MYSQL_USER: ${MYSQL_USER:-magento}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - magento
+
+  opensearch:
+    build:
+      context: ./opensearch
+    image: magento-opensearch:latest
+    container_name: magento-opensearch
+    environment:
+      discovery.type: single-node
+      plugins.security.disabled: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsSL http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - magento
+    ports:
+      - "9200:9200"
+    sysctls:
+      vm.max_map_count: "262144"
+
+  redis:
+    build:
+      context: ./redis
+    image: magento-redis:latest
+    container_name: magento-redis
+    command: ["redis-server", "/etc/redis/redis.conf"]
+    volumes:
+      - redis-data:/var/lib/redis
+    networks:
+      - magento
+
+  php-fpm:
+    build:
+      context: ./php-fpm
+    image: magento-php-fpm:latest
+    container_name: magento-php-fpm
+    environment:
+      PHP_MEMORY_LIMIT: "2048M"
+    volumes:
+      - magento-app:/var/www/html
+    networks:
+      - magento
+
+  nginx-backend:
+    build:
+      context: ./nginx-backend
+    image: magento-nginx-backend:latest
+    container_name: magento-nginx-backend
+    depends_on:
+      - php-fpm
+    volumes:
+      - magento-app:/var/www/html
+      - ./nginx-backend/sites.conf:/etc/nginx/conf.d/sites.conf:ro
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    networks:
+      - magento
+
+  varnish:
+    build:
+      context: ./varnish
+    image: magento-varnish:latest
+    container_name: magento-varnish
+    depends_on:
+      nginx-backend:
+        condition: service_started
+    environment:
+      VARNISH_BACKEND_HOST: nginx-backend
+      VARNISH_BACKEND_PORT: "8080"
+    volumes:
+      - ./varnish/default.vcl:/etc/varnish/default.vcl
+    ports:
+      - "6081:6081"
+    networks:
+      - magento
+
+  nginx-ssl:
+    build:
+      context: ./nginx-ssl
+    image: magento-nginx-ssl:latest
+    container_name: magento-nginx-ssl
+    depends_on:
+      varnish:
+        condition: service_started
+      nginx-backend:
+        condition: service_started
+    volumes:
+      - ./nginx-ssl/ssl.conf:/etc/nginx/conf.d/ssl.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - magento
+
+volumes:
+  mysql-data:
+  opensearch-data:
+  redis-data:
+  magento-app:
+
+networks:
+  magento:
+    driver: bridge
